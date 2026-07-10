@@ -1,0 +1,50 @@
+name: Cairo Tag Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour
+  workflow_dispatch:        # allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  check-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest Cairo tag
+        id: fetch
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/starkware-libs/cairo/tags \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['name'])")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Read last known tag
+        id: last
+        run: |
+          LAST=$(cat last_cairo_tag.txt 2>/dev/null || echo "")
+          echo "tag=$LAST" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack if new tag
+        if: steps.fetch.outputs.tag != steps.last.outputs.tag
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TAG: ${{ steps.fetch.outputs.tag }}
+        run: |
+          curl -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"$TAG\"}"
+
+      - name: Update last known tag
+        if: steps.fetch.outputs.tag != steps.last.outputs.tag
+        env:
+          TAG: ${{ steps.fetch.outputs.tag }}
+        run: |
+          echo "$TAG" > last_cairo_tag.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_cairo_tag.txt
+          git commit -m "chore: update last known Cairo tag to $TAG"
+          git push
