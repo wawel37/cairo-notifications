@@ -42,7 +42,7 @@ jobs:
             [ -z "$TAG" ] && continue
             curl -X POST "$SLACK_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
-              -d "{\"tag_name\": \"$TAG\"}"
+              -d "{\"tag-name\": \"$TAG\"}"
           done < new_tags.txt
 
       - name: Update known tags
