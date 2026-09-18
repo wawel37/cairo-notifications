@@ -14,39 +14,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch latest Cairo tag
-        id: fetch
+      - name: Fetch current Cairo tags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/starkware-libs/cairo/tags \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['name'])")
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/starkware-libs/cairo/tags?per_page=30" \
+            | python3 -c "import sys,json; print('\n'.join(t['name'] for t in json.load(sys.stdin)))" \
+            | sort -u > fetched_tags.txt
 
-      - name: Read last known tag
-        id: last
+      - name: Determine new tags
+        id: diff
         run: |
-          LAST=$(cat last_cairo_tag.txt 2>/dev/null || echo "")
-          echo "tag=$LAST" >> $GITHUB_OUTPUT
+          touch known_cairo_tags.txt
+          comm -23 fetched_tags.txt <(sort -u known_cairo_tags.txt) > new_tags.txt
+          if [ -s new_tags.txt ]; then
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Notify Slack if new tag
-        if: steps.fetch.outputs.tag != steps.last.outputs.tag
+      - name: Notify Slack for each new tag
+        if: steps.diff.outputs.has_new == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TAG: ${{ steps.fetch.outputs.tag }}
         run: |
-          curl -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"tag_name\": \"$TAG\"}"
+          while IFS= read -r TAG; do
+            [ -z "$TAG" ] && continue
+            curl -X POST "$SLACK_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\": \"$TAG\"}"
+          done < new_tags.txt
 
-      - name: Update last known tag
-        if: steps.fetch.outputs.tag != steps.last.outputs.tag
-        env:
-          TAG: ${{ steps.fetch.outputs.tag }}
+      - name: Update known tags
+        if: steps.diff.outputs.has_new == 'true'
         run: |
-          echo "$TAG" > last_cairo_tag.txt
+          sort -u fetched_tags.txt known_cairo_tags.txt -o known_cairo_tags.txt
+          rm -f fetched_tags.txt new_tags.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add last_cairo_tag.txt
-          git commit -m "chore: update last known Cairo tag to $TAG"
+          git add known_cairo_tags.txt
+          git commit -m "chore: update known Cairo tags"
           git push
